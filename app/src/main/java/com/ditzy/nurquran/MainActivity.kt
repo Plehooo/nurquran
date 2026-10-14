@@ -123,7 +123,10 @@ import com.ditzy.nurquran.ui.NurQuranTheme
 import com.ditzy.nurquran.ui.PaleGold
 import com.ditzy.nurquran.ui.PaleGreen
 import com.ditzy.nurquran.ui.SoftCream
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -171,6 +174,59 @@ private fun NurQuranApp(repository: IslamicRepository) {
     var permissionHint by remember { mutableStateOf("") }
     var playingGlobalAyah by remember { mutableIntStateOf(-1) }
     val quranAudio = remember { QuranAudioController() }
+
+
+    val adhanAudioPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        val target = File(context.filesDir, "adhan.ogg")
+                        val temp = File(context.filesDir, "adhan-selected.tmp")
+                        val backup = File(context.filesDir, "adhan-previous.tmp")
+                        temp.delete()
+                        backup.delete()
+
+                        val input = context.contentResolver.openInputStream(uri)
+                            ?: error("File audio tidak dapat dibaca.")
+                        input.use { source ->
+                            temp.outputStream().use { output ->
+                                source.copyTo(output)
+                            }
+                        }
+
+                        if (temp.length() < 20_000L) {
+                            temp.delete()
+                            error("File audio terlalu kecil atau kosong.")
+                        }
+
+                        if (target.exists() && !target.renameTo(backup)) {
+                            temp.delete()
+                            error("Tidak dapat mengganti audio lama.")
+                        }
+
+                        if (!temp.renameTo(target)) {
+                            if (backup.exists()) backup.renameTo(target)
+                            temp.delete()
+                            error("Audio baru gagal disimpan.")
+                        }
+                        backup.delete()
+                    }
+                }
+
+                permissionHint = if (result.isSuccess) {
+                    "Audio adzan berhasil disimpan dan akan dipakai pada jadwal berikutnya."
+                } else {
+                    "Gagal menyimpan audio: ${
+                        result.exceptionOrNull()?.message ?: "format tidak didukung"
+                    }"
+                }
+            }
+        }
+    }
+
 
     DisposableEffect(quranAudio) {
         onDispose { quranAudio.release() }
@@ -492,6 +548,9 @@ private fun NurQuranApp(repository: IslamicRepository) {
                             PrayerScheduler.cancelSaved(context)
                             permissionHint = "Adzan otomatis dinonaktifkan. Alarm terjadwal dan audio yang sedang diputar dihentikan."
                         }
+                    },
+                    onChooseAdhanAudio = {
+                        adhanAudioPicker.launch(arrayOf("audio/*"))
                     },
                     onOpenExactAlarm = { enableAdhan() }
                 )
@@ -1069,6 +1128,7 @@ private fun SettingsScreen(
     onBack: () -> Unit,
     onSetLocation: () -> Unit,
     onToggleAdhan: (Boolean) -> Unit,
+    onChooseAdhanAudio: () -> Unit,
     onOpenExactAlarm: () -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -1096,6 +1156,21 @@ private fun SettingsScreen(
                         Switch(checked = adhanEnabled, onCheckedChange = onToggleAdhan)
                     }
                     Divider(color = Color(0xFFE5E5DA))
+                    Text("Audio adzan pilihan", color = Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        "Pilih rekaman adzan Jiharkah yang tersimpan di HP. Audio disimpan secara privat di aplikasi.",
+                        color = MutedInk, fontSize = 12.sp, lineHeight = 18.sp
+                    )
+                    Button(
+                        onClick = onChooseAdhanAudio,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Jade)
+                    ) {
+                        Icon(Icons.Filled.VolumeUp, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Pilih audio Jiharkah dari HP")
+                    }
                     Text("Untuk adzan yang lebih presisi, izinkan notifikasi dan 'Alarm & pengingat' di Android. Kamu bisa mematikan fitur ini kapan saja.", color = MutedInk, fontSize = 12.sp, lineHeight = 18.sp)
                     if (hint.isNotBlank()) Text(hint, color = Jade, fontSize = 12.sp, lineHeight = 18.sp)
                     TextButton(onClick = onOpenExactAlarm) { Text("Buka pengaturan izin adzan", color = Jade) }
@@ -1104,7 +1179,7 @@ private fun SettingsScreen(
             Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = PaleGreen)) {
                 Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text("Tentang Nur Qur’an", color = Emerald, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text("Versi 1.0.0 · Dibuat dengan Android Kotlin + Jetpack Compose", color = Ink, fontSize = 12.sp)
+                    Text("Versi 1.2.0 · Android Kotlin + Jetpack Compose", color = Ink, fontSize = 12.sp)
                     Text("Teks Qur’an dan terjemahan: Al Quran Cloud API. Waktu sholat: AlAdhan API. Hadis: Hadith API gading.dev. Data online disimpan sebagai cache setelah berhasil dimuat.", color = MutedInk, fontSize = 11.sp, lineHeight = 17.sp)
                 }
             }
