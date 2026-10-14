@@ -1,10 +1,8 @@
 package com.nurquran.app.ui
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.WindowInsets.Companion.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoStories
@@ -66,7 +64,6 @@ fun NurQuranRoot(container: AppContainer) {
 
     NurQuranTheme(dark = dark) {
         Scaffold(
-            contentWindowInsets = WindowInsets.systemBars,
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                     tabs.forEach { tab ->
