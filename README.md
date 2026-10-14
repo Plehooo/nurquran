@@ -1,93 +1,62 @@
-# Nur Qur’an — Android Native
+# NurQuran Ultimate — Android source
 
-Aplikasi ibadah Android berbasis Kotlin + Jetpack Compose. Desain menggunakan hijau zamrud, krem, dan emas; bukan aplikasi web/HTML.
+**Status: source project created; Android build and APK signing have not yet been verified.** See [`docs/QA_CHECKLIST.md`](docs/QA_CHECKLIST.md) and [`docs/RESEARCH_LOG.md`](docs/RESEARCH_LOG.md) for precise status and evidence.
 
-## Fitur
+NurQuran Ultimate is a native Android app scaffold built with Kotlin and Jetpack Compose. It integrates remote Quran text/Indonesian translation, paginated hadith data, AlAdhan prayer times (method `20`), a mathematical Qibla bearing, local settings, a private JSON cache, and notification-only prayer reminders.
 
-- **Al-Qur’an:** daftar 114 surah, teks Arab Utsmani, terjemahan Indonesia, pencarian surah, posisi bacaan terakhir, cache surah yang pernah dibuka, serta audio murottal per ayat.
-- **Hadis:** beberapa koleksi populer (Bukhari, Muslim, Tirmidzi, Abu Dawud, An-Nasa’i, Ibnu Majah), teks Arab dan terjemahan Indonesia, serta pemuatan bertahap.
-- **Jadwal sholat:** Subuh, Zuhur, Asar, Maghrib, dan Isya berdasarkan koordinat dengan metode Kemenag RI (AlAdhan method 20).
-- **Adzan otomatis:** nonaktif secara default hingga diaktifkan pengguna; mendukung tombol on/off, penghentian audio saat dimatikan, izin alarm tepat, notifikasi, serta penjadwalan ulang saat perangkat menyala atau izin alarm berubah.
-- **Kiblat:** perhitungan bearing menuju Ka’bah dan kompas menggunakan sensor rotasi perangkat.
-- **Lokasi:** pilih kota/koordinat manual atau tekan **Gunakan lokasi perangkat**. Izin lokasi foreground baru diminta setelah pengguna menekan tombol; aplikasi tidak melacak lokasi di latar belakang.
-- **Brand/UI:** ikon aplikasi dan ilustrasi logo khusus, kartu konten, navigasi bawah, dan layout ramah ponsel.
+## Current scope
 
-## Build APK melalui Termux → GitHub Actions
+- Quran: request a validated 114-surah catalog, then load Arabic `quran-uthmani` and Indonesian `id.indonesian` editions for the selected surah. Valid responses are cached for repeat/offline reading. Initial content requires internet access.
+- Hadith: the app requests a book list and pages from `hadis-api-id`; it refuses empty/mismatched page payloads and caches validated pages.
+- Prayer times: AlAdhan API method 20, with a manually entered location or best-effort last-known device coordinates. The default city/coordinates are Jakarta and are labelled as the initial default—not as detected GPS.
+- Reminders: local notifications only. They do **not** play audio adhan. Reminders default off; exact alarms may be unavailable on Android 12+ and use an inexact fallback. The current implementation schedules upcoming times for the supplied day only; reopen the app each day to refresh them.
+- Qibla: spherical initial bearing from true north. The screen is a visual bearing aid, **not** a compass sensor/calibrated live direction.
+- Privacy: no account or analytics SDK is wired in; API logging is disabled, backup/data extraction is disabled, and the cache is in app-private storage. Location is only used when the user requests a prayer timetable. Review [`PRIVACY.md`](PRIVACY.md).
+- Doa/dzikir: the screen explicitly explains the collection has not been loaded because a suitable source/license has not yet been verified. It does not fabricate devotional text.
 
-Build Android SDK dilakukan di GitHub Actions, jadi Termux tidak perlu memasang Android SDK lengkap.
+Not implemented in this initial source delivery: adhan/murottal audio, the SAF-based Jiharkah/audio-file picker, live sensor compass, a bundled offline Quran database/custom bundled Arabic font, a Room corpus database, WorkManager-based deferred work, reboot/timezone/next-day reminder rescheduling, and a populated vetted doa/dzikir collection. Do not consider those features complete.
 
-1. Unduh ZIP proyek ke folder Downloads Android, lalu ekstrak dari Termux:
+## Build locally
 
-   ```bash
-   termux-setup-storage
-   pkg update
-   pkg install git gh curl unzip openjdk-17 -y
-   cd ~/storage/downloads
-   unzip NurQuran-Termux-GitHub.zip -d ~/
-   cd ~/NurQuran
-   chmod +x gradlew termux-push.sh
-   gh auth login
-   ```
+Requirements: JDK 17, Android SDK platform/build-tools API 36, and Gradle 8.13. The project archive has a **bootstrap `gradlew` shim, not the official Gradle Wrapper JAR**, because the authoring environment could not retrieve the wrapper artifacts. Once Gradle is installed, create the standard wrapper as follows:
 
-2. Buat repository kosong bernama `nurquran` di GitHub (jangan centang opsi README/license karena proyek ini sudah memilikinya). Kemudian push dengan script:
-
-   ```bash
-   ./termux-push.sh https://github.com/Plehooo/nurquran.git
-   ```
-
-   Ganti `Plehooo` bila username GitHub-mu berbeda. Script menjalankan `git init` bila diperlukan, membuat commit, lalu push ke branch `main`.
-
-   Cara manual yang setara, bila dibutuhkan:
-
-   ```bash
-   git init
-   git branch -M main
-   git add .
-   git commit -m "Initial Nur Quran Android app"
-   git remote add origin https://github.com/Plehooo/nurquran.git
-   git push -u origin main
-   ```
-
-3. Di GitHub buka **Actions → Build Nur Qur'an APK**. Tunggu sampai workflow selesai.
-4. Buka run workflow yang hijau, lalu unduh artifact **NurQuran-debug-apk**. Di dalamnya ada `app-debug.apk`; pindahkan ke HP dan instal.
-
-`app-debug.apk` adalah build debug untuk pengujian/sideload, bukan APK release bertanda tangan untuk distribusi Play Store. Workflow otomatis berjalan ketika ada push ke `main`/`master`, dan juga dapat dijalankan melalui **Run workflow**.
-
-## Build lokal (opsional)
-
-`./gradlew assembleDebug` membutuhkan Android SDK Platform 35 dan Android Build Tools 35.0.0. Di lingkungan Termux biasa, gunakan GitHub Actions di atas jika SDK belum terpasang.
-
-## Izin dan perilaku alarm
-
-- Lokasi: izin lokasi hanya diminta setelah menekan **Gunakan lokasi perangkat**. Jika ditolak, kota dan koordinat manual tetap bisa dipakai.
-- Pada Android 13+, izinkan **notifikasi** untuk status dan kontrol adzan.
-- Pada Android 12+, buka **pengaturan alarm tepat** melalui tombol *Atur izin adzan*. Jika izin tidak tersedia, aplikasi mencoba alarm inexact yang dapat tertunda oleh sistem.
-- Beberapa perangkat menghentikan aplikasi latar belakang melalui penghemat baterai. Izinkan aktivitas latar belakang untuk aplikasi ini jika alarm tidak berbunyi.
-- Audio adzan diunduh satu kali ketika internet tersedia. Jika gagal diunduh, pemutar memakai suara alarm bawaan perangkat sebagai fallback.
-- Jadwal API dapat berbeda beberapa menit dari jadwal masjid atau otoritas setempat. Cocokkan waktu dengan jadwal resmi di wilayahmu.
-
-## API dan atribusi
-
-- Al-Qur’an, terjemahan, dan audio murottal: [Al Quran Cloud API](https://alquran.cloud/api). Data teks/terjemahan dimuat dari layanan dan cache lokal dibuat untuk surah yang pernah dibuka.
-- Waktu sholat: [AlAdhan Prayer Times API](https://aladhan.com/prayer-times-api), metode 20 (Kementerian Agama Indonesia).
-- Hadis berbahasa Indonesia: [gadingnst/hadith-api](https://github.com/gadingnst/hadith-api) dengan fallback [hadis-api-id](https://github.com/renomureza/hadis-api-id). Verifikasi edisi/rujukan saat mengutip hadis untuk keperluan resmi.
-- Audio adzan: [Beautiful adhan.ogg](https://commons.wikimedia.org/wiki/File:Beautiful_adhan.ogg), karya Adam-synagda di Wikimedia Commons, dilisensikan CC0 1.0 oleh pengunggah. File diunduh saat aplikasi berjalan dan tidak disertakan sebagai file audio di repositori.
-- Logo aplikasi dibuat khusus untuk proyek Nur Qur’an.
-
-## Struktur proyek
-
-```text
-NurQuran/
-├── app/src/main/java/com/ditzy/nurquran/
-│   ├── MainActivity.kt
-│   ├── data/
-│   │   ├── IslamicRepository.kt
-│   │   └── QuranAudioController.kt
-│   ├── prayer/PrayerAlarm.kt
-│   └── ui/NurQuranTheme.kt
-├── .github/workflows/android.yml
-├── app/build.gradle.kts
-├── build.gradle.kts
-├── settings.gradle.kts
-└── gradlew
+```sh
+gradle wrapper --gradle-version 8.13 --gradle-distribution-sha256-sum 20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78 --distribution-type bin
+chmod +x gradlew
+./gradlew --version
+./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
+
+Debug APK (after a successful build): `app/build/outputs/apk/debug/app-debug.apk`.
+
+### Termux (Android phone)
+
+```sh
+pkg update
+pkg install git gh python openjdk-17 gradle unzip -y
+cd ~/NurQuranUltimate
+gradle wrapper --gradle-version 8.13 --gradle-distribution-sha256-sum 20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78 --distribution-type bin
+chmod +x gradlew
+./gradlew testDebugUnitTest assembleDebug
+```
+
+Android SDK packages are large and not always straightforward to install in Termux. The recommended build path is the included GitHub Actions workflow, which sets up a hosted Android SDK. Do not assume a local Termux build works until it completes successfully on your device.
+
+## GitHub Actions / APK artifacts
+
+`.github/workflows/android.yml` creates a standard wrapper in CI, validates it, installs Android API 36, runs unit tests and lint, and attempts a debug build. The debug APK and test reports are uploaded as an Actions artifact when files exist. An optional separate job builds a release APK only when all four signing secrets are present:
+
+- `ANDROID_KEYSTORE_BASE64` — base64 of a private release keystore
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_PASSWORD`
+
+Never commit the keystore, passwords, or decoded signing file. Configure secrets in the repository's **Settings → Secrets and variables → Actions**. The workflow verifies the APK signature and writes a SHA-256 checksum before artifact upload. A workflow file being present is not proof that a CI run or APK build has passed; only the Actions run logs and artifacts establish that.
+
+## Tests
+
+Unit tests are provided for time parsing/scheduling logic, Qibla bearing, structural Quran validation, hadith JSON/page parsing, page de-duplication logic, a synthetic Retrofit pagination contract, and cache write policy. Fixtures are synthetic strings and do not embed actual Quran verses or hadith. These tests have **not run in this authoring environment** because Gradle/Android SDK are unavailable and external DNS retrieval was blocked. See `docs/TESTING.md`.
+
+## Sources
+
+See [`docs/RESEARCH_LOG.md`](docs/RESEARCH_LOG.md) for the reviewed API documentation and the difference between web documentation review and runtime tests. Sources are consumed remotely; this repository does not bundle or redistribute their datasets.
