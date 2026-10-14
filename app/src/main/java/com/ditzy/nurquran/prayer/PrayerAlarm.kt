@@ -35,7 +35,7 @@ object PrayerScheduler {
 
     fun scheduleEvents(context: Context, events: List<PrayerAlarmEvent>) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("adhan_enabled", true)) {
+        if (!prefs.getBoolean("adhan_enabled", false)) {
             cancelSaved(context)
             return
         }
@@ -73,6 +73,7 @@ object PrayerScheduler {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         cancelPendingFromSaved(context, prefs.getString("prayer_events", "[]") ?: "[]")
         prefs.edit().putString("prayer_events", "[]").apply()
+        runCatching { context.stopService(Intent(context, AdhanService::class.java)) }
     }
 
     private fun cancelPendingFromSaved(context: Context, raw: String) {
@@ -115,8 +116,12 @@ object PrayerScheduler {
         scheduleEvents(context, events)
     }
 
+    fun canScheduleExactAlarms(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
+
     fun openExactAlarmSettings(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !canScheduleExactAlarms(context)) {
             runCatching {
                 context.startActivity(
                     Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
@@ -131,6 +136,7 @@ object PrayerScheduler {
 
 class AdhanReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
+        if (!context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("adhan_enabled", false)) return
         val name = intent?.getStringExtra(EXTRA_PRAYER_NAME) ?: "Waktu sholat"
         val serviceIntent = Intent(context, AdhanService::class.java).apply { putExtra(EXTRA_PRAYER_NAME, name) }
         try {
@@ -165,7 +171,12 @@ class AdhanReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val action = intent?.action ?: return
-        if (action in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED)) {
+        if (action in setOf(
+                Intent.ACTION_BOOT_COMPLETED,
+                Intent.ACTION_TIME_CHANGED,
+                Intent.ACTION_TIMEZONE_CHANGED,
+                "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"
+            )) {
             PrayerScheduler.rescheduleSaved(context)
         }
     }

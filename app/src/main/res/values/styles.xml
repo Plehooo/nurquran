@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.NurQuran" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
@@ -6,5 +7,13 @@
         <item name="android:navigationBarColor">#F7F3E8</item>
         <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowBackground">@color/launch_background</item>
+    </style>
+
+    <style name="Theme.NurQuran.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/launch_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/nur_logo</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/launch_background</item>
+        <item name="windowSplashScreenAnimationDuration">500</item>
+        <item name="postSplashScreenTheme">@style/Theme.NurQuran</item>
     </style>
 </resources>

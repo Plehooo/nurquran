@@ -65,7 +65,7 @@ class IslamicRepository(context: Context) {
             .apply()
     }
 
-    fun isAdhanEnabled(): Boolean = prefs.getBoolean("adhan_enabled", true)
+    fun isAdhanEnabled(): Boolean = prefs.getBoolean("adhan_enabled", false)
 
     fun setAdhanEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("adhan_enabled", enabled).apply()
@@ -172,39 +172,90 @@ class IslamicRepository(context: Context) {
         }
     }
 
+    fun cachedHadiths(book: String, start: Int): List<HadithItem> = readCachedHadiths(book, start)
+
     suspend fun getHadiths(book: String, start: Int, end: Int): List<HadithItem> = withContext(Dispatchers.IO) {
-        val cacheKey = "hadith_${book}_$start"
-        runCatching {
-            val root = requestJson("https://api.hadith.gading.dev/books/$book?range=$start-$end")
-            val data = root.optJSONObject("data") ?: root
-            val entries = data.optJSONArray("hadiths") ?: data.optJSONArray("hadith") ?: JSONArray()
-            val result = buildList {
-                for (i in 0 until entries.length()) {
-                    val o = entries.optJSONObject(i) ?: continue
-                    val arabic = o.optString("arab", o.optString("arabic", ""))
-                    val translation = cleanText(o.optString("id", o.optString("translation", "")))
-                    if (arabic.isNotBlank() || translation.isNotBlank()) {
-                        add(HadithItem(o.optInt("number", start + i), arabic, translation))
-                    }
-                }
-            }
+        val cacheKey = "hadith_${book}_${start}"
+        val limit = (end - start + 1).coerceIn(1, 300)
+        val safeEnd = start + limit - 1
+        val cached = readCachedHadiths(book, start)
+        val page = ((start - 1).coerceAtLeast(0) / limit) + 1
+        val urls = mutableListOf("https://api.hadith.gading.dev/books/$book?range=$start-$safeEnd")
+        alternateHadithSlugs(book).forEach { slug ->
+            urls += "https://hadis-api-id.vercel.app/hadith/$slug?page=$page&limit=$limit"
+        }
+
+        for (address in urls) {
+            val result = runCatching {
+                parseHadithResponse(requestJson(address, connectTimeoutMs = 5_000, readTimeoutMs = 8_000), start)
+            }.getOrDefault(emptyList())
             if (result.isNotEmpty()) {
                 val array = JSONArray()
-                result.forEach { array.put(JSONObject().put("number", it.number).put("ar", it.arabic).put("id", it.translation)) }
-                prefs.edit().putString(cacheKey, array.toString()).apply()
-            }
-            result
-        }.getOrElse {
-            runCatching {
-                val array = JSONArray(prefs.getString(cacheKey, "[]") ?: "[]")
-                buildList {
-                    for (i in 0 until array.length()) {
-                        val o = array.getJSONObject(i)
-                        add(HadithItem(o.optInt("number"), o.stringOrEmpty("ar"), o.stringOrEmpty("id")))
-                    }
+                result.forEach { item ->
+                    array.put(JSONObject().put("number", item.number).put("ar", item.arabic).put("id", item.translation))
                 }
-            }.getOrDefault(emptyList())
+                prefs.edit().putString(cacheKey, array.toString()).apply()
+                return@withContext result
+            }
         }
+        cached
+    }
+
+    private fun alternateHadithSlugs(book: String): List<String> = when (book.lowercase(Locale.ROOT)) {
+        "abudaud", "abu-daud", "abudawud" -> listOf("abu-dawud", "abudaud", "abudawud").distinct()
+        "ibnumajah", "ibnu-majah" -> listOf("ibnu-majah", "ibnumajah").distinct()
+        "nasai", "an-nasai" -> listOf("an-nasai", "nasai").distinct()
+        else -> listOf(book)
+    }
+
+    private fun readCachedHadiths(book: String, start: Int): List<HadithItem> = runCatching {
+        val array = JSONArray(prefs.getString("hadith_${book}_${start}", "[]") ?: "[]")
+        buildList {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                add(HadithItem(item.optInt("number", start + i), item.stringOrEmpty("ar"), item.stringOrEmpty("id")))
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    private fun parseHadithResponse(root: JSONObject, fallbackStart: Int): List<HadithItem> {
+        val entries = findHadithArray(root) ?: return emptyList()
+        return buildList {
+            for (i in 0 until entries.length()) {
+                val item = entries.optJSONObject(i) ?: continue
+                val arabic = firstHadithText(item, "arab", "arabic", "ar", "textArabic", "arabicText")
+                val translation = cleanText(firstHadithText(item, "id", "translation", "indo", "indonesia", "textIndonesian", "terjemahan"))
+                if (arabic.isNotBlank() || translation.isNotBlank()) {
+                    add(HadithItem(item.optInt("number", item.optInt("hadithNumber", fallbackStart + i)), arabic, translation))
+                }
+            }
+        }
+    }
+
+    private fun findHadithArray(root: JSONObject, depth: Int = 0): JSONArray? {
+        if (depth > 4) return null
+        for (key in listOf("hadiths", "hadith", "items", "results", "data", "records")) {
+            val array = root.optJSONArray(key)
+            if (array != null && array.length() > 0) return array
+        }
+        for (key in listOf("data", "result", "results", "payload", "hadiths", "hadith")) {
+            val nested = root.optJSONObject(key) ?: continue
+            findHadithArray(nested, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
+    private fun firstHadithText(item: JSONObject, vararg keys: String): String {
+        for (key in keys) {
+            val value = item.opt(key)
+            val text = when (value) {
+                is String -> value
+                is JSONObject -> value.optString("id", value.optString("text", value.optString("translation", "")))
+                else -> ""
+            }.trim()
+            if (text.isNotBlank() && text != "null") return text
+        }
+        return ""
     }
 
     fun cachedTodayPrayerTimes(location: AppLocation): List<PrayerTime> {
@@ -322,10 +373,10 @@ class IslamicRepository(context: Context) {
     private fun cleanText(raw: String): String = Html.fromHtml(raw, Html.FROM_HTML_MODE_LEGACY).toString()
         .replace('\u00a0', ' ').replace(Regex("\\s+"), " ").trim()
 
-    private fun requestJson(address: String): JSONObject {
+    private fun requestJson(address: String, connectTimeoutMs: Int = 12_000, readTimeoutMs: Int = 18_000): JSONObject {
         val connection = (URL(address).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 12_000
-            readTimeout = 18_000
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
             requestMethod = "GET"
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "NurQuran-Android/1.0")

@@ -7,9 +7,9 @@ Aplikasi ibadah Android berbasis Kotlin + Jetpack Compose. Desain menggunakan hi
 - **Al-Qur’an:** daftar 114 surah, teks Arab Utsmani, terjemahan Indonesia, pencarian surah, posisi bacaan terakhir, cache surah yang pernah dibuka, serta audio murottal per ayat.
 - **Hadis:** beberapa koleksi populer (Bukhari, Muslim, Tirmidzi, Abu Dawud, An-Nasa’i, Ibnu Majah), teks Arab dan terjemahan Indonesia, serta pemuatan bertahap.
 - **Jadwal sholat:** Subuh, Zuhur, Asar, Maghrib, dan Isya berdasarkan koordinat dengan metode Kemenag RI (AlAdhan method 20).
-- **Adzan otomatis:** penjadwalan alarm, audio adzan, notifikasi, penjadwalan ulang setelah ponsel dinyalakan, serta opsi menyalakan/mematikan fitur.
+- **Adzan otomatis:** nonaktif secara default hingga diaktifkan pengguna; mendukung tombol on/off, penghentian audio saat dimatikan, izin alarm tepat, notifikasi, serta penjadwalan ulang saat perangkat menyala atau izin alarm berubah.
 - **Kiblat:** perhitungan bearing menuju Ka’bah dan kompas menggunakan sensor rotasi perangkat.
-- **Lokasi:** dapat diganti melalui nama kota dan koordinat latitude/longitude. Aplikasi tidak meminta izin lokasi karena koordinat dimasukkan pengguna.
+- **Lokasi:** pilih kota/koordinat manual atau tekan **Gunakan lokasi perangkat**. Izin lokasi foreground baru diminta setelah pengguna menekan tombol; aplikasi tidak melacak lokasi di latar belakang.
 - **Brand/UI:** ikon aplikasi dan ilustrasi logo khusus, kartu konten, navigasi bawah, dan layout ramah ponsel.
 
 ## Build APK melalui Termux → GitHub Actions
@@ -59,7 +59,8 @@ Build Android SDK dilakukan di GitHub Actions, jadi Termux tidak perlu memasang 
 
 ## Izin dan perilaku alarm
 
-- Pada Android 13+, izinkan **notifikasi**.
+- Lokasi: izin lokasi hanya diminta setelah menekan **Gunakan lokasi perangkat**. Jika ditolak, kota dan koordinat manual tetap bisa dipakai.
+- Pada Android 13+, izinkan **notifikasi** untuk status dan kontrol adzan.
 - Pada Android 12+, buka **pengaturan alarm tepat** melalui tombol *Atur izin adzan*. Jika izin tidak tersedia, aplikasi mencoba alarm inexact yang dapat tertunda oleh sistem.
 - Beberapa perangkat menghentikan aplikasi latar belakang melalui penghemat baterai. Izinkan aktivitas latar belakang untuk aplikasi ini jika alarm tidak berbunyi.
 - Audio adzan diunduh satu kali ketika internet tersedia. Jika gagal diunduh, pemutar memakai suara alarm bawaan perangkat sebagai fallback.
@@ -69,7 +70,7 @@ Build Android SDK dilakukan di GitHub Actions, jadi Termux tidak perlu memasang 
 
 - Al-Qur’an, terjemahan, dan audio murottal: [Al Quran Cloud API](https://alquran.cloud/api). Data teks/terjemahan dimuat dari layanan dan cache lokal dibuat untuk surah yang pernah dibuka.
 - Waktu sholat: [AlAdhan Prayer Times API](https://aladhan.com/prayer-times-api), metode 20 (Kementerian Agama Indonesia).
-- Hadis berbahasa Indonesia: [gadingnst/hadith-api](https://github.com/gadingnst/hadith-api), yang mencantumkan tafsirq.com sebagai salah satu sumber data. Verifikasi edisi/rujukan saat mengutip hadis untuk keperluan resmi.
+- Hadis berbahasa Indonesia: [gadingnst/hadith-api](https://github.com/gadingnst/hadith-api) dengan fallback [hadis-api-id](https://github.com/renomureza/hadis-api-id). Verifikasi edisi/rujukan saat mengutip hadis untuk keperluan resmi.
 - Audio adzan: [Beautiful adhan.ogg](https://commons.wikimedia.org/wiki/File:Beautiful_adhan.ogg), karya Adam-synagda di Wikimedia Commons, dilisensikan CC0 1.0 oleh pengunggah. File diunduh saat aplikasi berjalan dan tidak disertakan sebagai file audio di repositori.
 - Logo aplikasi dibuat khusus untuk proyek Nur Qur’an.
 

@@ -3,6 +3,9 @@ package com.ditzy.nurquran
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.graphics.Color as AndroidColor
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -11,6 +14,7 @@ import android.hardware.GeomagneticField
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -95,6 +99,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -128,6 +133,7 @@ import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         window.statusBarColor = AndroidColor.rgb(8, 47, 36)
         window.navigationBarColor = AndroidColor.rgb(247, 243, 232)
@@ -161,7 +167,7 @@ private fun NurQuranApp(repository: IslamicRepository) {
     var hadiths by remember { mutableStateOf<List<HadithItem>>(emptyList()) }
     var hadithStart by remember { mutableIntStateOf(21) }
     var isHadithLoading by remember { mutableStateOf(false) }
-    var adhanEnabled by remember { mutableStateOf(true) }
+    var adhanEnabled by remember { mutableStateOf(false) }
     var permissionHint by remember { mutableStateOf("") }
     var playingGlobalAyah by remember { mutableIntStateOf(-1) }
     val quranAudio = remember { QuranAudioController() }
@@ -170,18 +176,129 @@ private fun NurQuranApp(repository: IslamicRepository) {
         onDispose { quranAudio.release() }
     }
 
+    fun applyDeviceLocation(fix: Location?) {
+        if (fix == null) {
+            permissionHint = "Lokasi belum ditemukan. Aktifkan GPS/lokasi, coba lagi, atau masukkan koordinat secara manual."
+            return
+        }
+        val updated = AppLocation("Lokasi perangkat", fix.latitude, fix.longitude)
+        repository.saveLocation(updated)
+        location = updated
+        showLocationDialog = false
+        permissionHint = "Lokasi diperbarui. Jadwal sholat dan arah kiblat disesuaikan dengan koordinat perangkat."
+    }
+
+    fun resolveDeviceLocation() {
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = runCatching { manager.getProviders(true) }
+            .getOrDefault(emptyList())
+            .sortedBy { provider ->
+                when (provider) {
+                    LocationManager.NETWORK_PROVIDER -> 0
+                    LocationManager.GPS_PROVIDER -> 1
+                    else -> 2
+                }
+            }
+        val recent = providers.mapNotNull { provider ->
+            runCatching { manager.getLastKnownLocation(provider) }.getOrNull()
+        }.maxByOrNull { it.time }
+        if (recent != null && System.currentTimeMillis() - recent.time < 6 * 60 * 60 * 1000L) {
+            applyDeviceLocation(recent)
+            return
+        }
+        if (providers.isEmpty()) {
+            applyDeviceLocation(null)
+            return
+        }
+
+        fun tryProvider(index: Int) {
+            if (index >= providers.size) {
+                applyDeviceLocation(null)
+                return
+            }
+            val provider = providers[index]
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                runCatching {
+                    manager.getCurrentLocation(provider, null, ContextCompat.getMainExecutor(context)) { fix ->
+                        if (fix != null) applyDeviceLocation(fix) else tryProvider(index + 1)
+                    }
+                }.onFailure { tryProvider(index + 1) }
+            } else {
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(fix: Location) {
+                        runCatching { manager.removeUpdates(this) }
+                        applyDeviceLocation(fix)
+                    }
+
+                    @Deprecated("Deprecated in Android")
+                    override fun onStatusChanged(providerName: String?, status: Int, extras: Bundle?) = Unit
+
+                    override fun onProviderEnabled(providerName: String) = Unit
+
+                    override fun onProviderDisabled(providerName: String) {
+                        runCatching { manager.removeUpdates(this) }
+                        tryProvider(index + 1)
+                    }
+                }
+                runCatching { manager.requestSingleUpdate(provider, listener, Looper.getMainLooper()) }
+                    .onFailure { tryProvider(index + 1) }
+            }
+        }
+        tryProvider(0)
+    }
+
+    fun scheduleAdhanEvents() {
+        scope.launch {
+            isPrayerLoading = true
+            val updatedPack = repository.getPrayerPack(location)
+            prayerPack = updatedPack
+            if (repository.isAdhanEnabled()) PrayerScheduler.scheduleEvents(context, updatedPack.events)
+            isPrayerLoading = false
+            permissionHint = when {
+                updatedPack.events.isEmpty() -> "Jadwal sholat belum tersedia. Periksa koneksi dan lokasi, lalu muat ulang jadwal."
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !PrayerScheduler.canScheduleExactAlarms(context) ->
+                    "Adzan aktif dengan alarm cadangan. Aktifkan izin 'Alarm & pengingat' agar waktunya lebih presisi."
+                else -> "Adzan otomatis aktif. Pastikan notifikasi diizinkan dan pembatasan baterai tidak memblokir aplikasi."
+            }
+        }
+    }
+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) PrayerScheduler.openExactAlarmSettings(context)
-        else permissionHint = "Izinkan notifikasi agar pengingat sholat dapat tampil."
+        if (granted) {
+            repository.setAdhanEnabled(true)
+            adhanEnabled = true
+            if (!PrayerScheduler.canScheduleExactAlarms(context)) PrayerScheduler.openExactAlarmSettings(context)
+            scope.launch { repository.downloadAdhanIfNeeded() }
+            scheduleAdhanEvents()
+        } else {
+            repository.setAdhanEnabled(false)
+            adhanEnabled = false
+            PrayerScheduler.cancelSaved(context)
+            permissionHint = "Adzan dimatikan karena izin notifikasi ditolak. Kamu bisa mengaktifkannya kembali di Pengaturan."
+        }
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.any { it }) resolveDeviceLocation()
+        else permissionHint = "Izin lokasi ditolak. Jadwal tetap bisa diatur lewat kota atau koordinat manual."
+    }
+
+    fun requestDeviceLocation() {
+        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (hasFine || hasCoarse) resolveDeviceLocation()
+        else locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
     }
 
     LaunchedEffect(Unit) {
         surahs = repository.getSurahs()
         dailyAyah = repository.getDailyAyah()
         adhanEnabled = repository.isAdhanEnabled()
-        repository.downloadAdhanIfNeeded()
+        if (repository.isAdhanEnabled()) repository.downloadAdhanIfNeeded()
     }
 
     LaunchedEffect(location.latitude, location.longitude) {
@@ -192,9 +309,11 @@ private fun NurQuranApp(repository: IslamicRepository) {
     }
 
     LaunchedEffect(selectedBook) {
-        isHadithLoading = true
-        hadiths = repository.getHadiths(selectedBook, 1, 20)
+        hadiths = repository.cachedHadiths(selectedBook, 1)
         hadithStart = 21
+        isHadithLoading = true
+        val firstPage = repository.getHadiths(selectedBook, 1, 20)
+        if (firstPage.isNotEmpty()) hadiths = firstPage
         isHadithLoading = false
     }
 
@@ -227,16 +346,19 @@ private fun NurQuranApp(repository: IslamicRepository) {
 
     fun enableAdhan() {
         permissionHint = ""
+        adhanEnabled = true
+        repository.setAdhanEnabled(true)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            PrayerScheduler.openExactAlarmSettings(context)
-            scope.launch {
-                prayerPack = repository.getPrayerPack(location)
-                PrayerScheduler.scheduleEvents(context, prayerPack.events)
-                permissionHint = "Alarm adzan dijadwalkan. Pastikan izin alarm, notifikasi, dan baterai aplikasi tidak dibatasi."
-            }
+            permissionHint = "Izinkan notifikasi agar status dan kontrol adzan tampil dengan benar."
+            return
         }
+        if (!PrayerScheduler.canScheduleExactAlarms(context)) {
+            PrayerScheduler.openExactAlarmSettings(context)
+            permissionHint = "Aktifkan izin 'Alarm & pengingat' di pengaturan Android. Alarm cadangan mungkin terlambat."
+        }
+        scope.launch { repository.downloadAdhanIfNeeded() }
+        scheduleAdhanEvents()
     }
 
     Scaffold(
@@ -310,13 +432,27 @@ private fun NurQuranApp(repository: IslamicRepository) {
                     selectedBook = selectedBook,
                     hadiths = hadiths,
                     loading = isHadithLoading,
-                    onSelectBook = { selectedBook = it },
+                    onSelectBook = { book ->
+                        selectedBook = book
+                        hadiths = repository.cachedHadiths(book, 1)
+                        hadithStart = 21
+                    },
+                    onRetry = {
+                        scope.launch {
+                            hadiths = repository.cachedHadiths(selectedBook, 1)
+                            hadithStart = 21
+                            isHadithLoading = true
+                            val firstPage = repository.getHadiths(selectedBook, 1, 20)
+                            if (firstPage.isNotEmpty()) hadiths = firstPage
+                            isHadithLoading = false
+                        }
+                    },
                     onLoadMore = {
                         scope.launch {
                             isHadithLoading = true
                             val more = repository.getHadiths(selectedBook, hadithStart, hadithStart + 19)
                             if (more.isNotEmpty()) {
-                                hadiths = hadiths + more
+                                hadiths = (hadiths + more).distinctBy { it.number }
                                 hadithStart += 20
                             }
                             isHadithLoading = false
@@ -344,17 +480,18 @@ private fun NurQuranApp(repository: IslamicRepository) {
                 AppTab.SETTINGS -> SettingsScreen(
                     location = location,
                     adhanEnabled = adhanEnabled,
+                    hint = permissionHint,
                     onBack = { tab = AppTab.HOME },
                     onSetLocation = { showLocationDialog = true },
                     onToggleAdhan = { enabled ->
-                        adhanEnabled = enabled
-                        repository.setAdhanEnabled(enabled)
                         if (enabled) {
-                            scope.launch {
-                                prayerPack = repository.getPrayerPack(location)
-                                PrayerScheduler.scheduleEvents(context, prayerPack.events)
-                            }
-                        } else PrayerScheduler.cancelSaved(context)
+                            enableAdhan()
+                        } else {
+                            adhanEnabled = false
+                            repository.setAdhanEnabled(false)
+                            PrayerScheduler.cancelSaved(context)
+                            permissionHint = "Adzan otomatis dinonaktifkan. Alarm terjadwal dan audio yang sedang diputar dihentikan."
+                        }
                     },
                     onOpenExactAlarm = { enableAdhan() }
                 )
@@ -366,6 +503,7 @@ private fun NurQuranApp(repository: IslamicRepository) {
         LocationDialog(
             current = location,
             onDismiss = { showLocationDialog = false },
+            onUseCurrentLocation = { requestDeviceLocation() },
             onSave = { updated ->
                 repository.saveLocation(updated)
                 location = updated
@@ -698,6 +836,7 @@ private fun HadithScreen(
     hadiths: List<HadithItem>,
     loading: Boolean,
     onSelectBook: (String) -> Unit,
+    onRetry: () -> Unit,
     onLoadMore: () -> Unit
 ) {
     val books = listOf("bukhari" to "Bukhari", "muslim" to "Muslim", "tirmidzi" to "Tirmidzi", "abudaud" to "Abu Dawud", "nasai" to "An-Nasa’i", "ibnumajah" to "Ibnu Majah")
@@ -718,7 +857,7 @@ private fun HadithScreen(
         if (hadiths.isEmpty() && loading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { androidx.compose.material3.CircularProgressIndicator(color = Jade) }
         } else if (hadiths.isEmpty()) {
-            EmptyPanel("Hadis belum berhasil dimuat", "Periksa koneksi internet lalu pilih kembali koleksi hadis.", onLoadMore)
+            EmptyPanel("Hadis belum berhasil dimuat", "Periksa koneksi internet lalu coba ulang halaman pertama.", onRetry)
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -926,6 +1065,7 @@ private fun qiblaBearing(latitude: Double, longitude: Double): Float {
 private fun SettingsScreen(
     location: AppLocation,
     adhanEnabled: Boolean,
+    hint: String,
     onBack: () -> Unit,
     onSetLocation: () -> Unit,
     onToggleAdhan: (Boolean) -> Unit,
@@ -956,7 +1096,8 @@ private fun SettingsScreen(
                         Switch(checked = adhanEnabled, onCheckedChange = onToggleAdhan)
                     }
                     Divider(color = Color(0xFFE5E5DA))
-                    Text("Izin alarm yang tepat diperlukan oleh sebagian versi Android. Jika izin tidak diberikan, sistem menggunakan alarm yang lebih fleksibel.", color = MutedInk, fontSize = 12.sp, lineHeight = 18.sp)
+                    Text("Untuk adzan yang lebih presisi, izinkan notifikasi dan 'Alarm & pengingat' di Android. Kamu bisa mematikan fitur ini kapan saja.", color = MutedInk, fontSize = 12.sp, lineHeight = 18.sp)
+                    if (hint.isNotBlank()) Text(hint, color = Jade, fontSize = 12.sp, lineHeight = 18.sp)
                     TextButton(onClick = onOpenExactAlarm) { Text("Buka pengaturan izin adzan", color = Jade) }
                 }
             }
@@ -972,7 +1113,12 @@ private fun SettingsScreen(
 }
 
 @Composable
-private fun LocationDialog(current: AppLocation, onDismiss: () -> Unit, onSave: (AppLocation) -> Unit) {
+private fun LocationDialog(
+    current: AppLocation,
+    onDismiss: () -> Unit,
+    onUseCurrentLocation: () -> Unit,
+    onSave: (AppLocation) -> Unit
+) {
     var name by remember(current) { mutableStateOf(current.name) }
     var latitude by remember(current) { mutableStateOf(current.latitude.toString()) }
     var longitude by remember(current) { mutableStateOf(current.longitude.toString()) }
@@ -982,7 +1128,17 @@ private fun LocationDialog(current: AppLocation, onDismiss: () -> Unit, onSave: 
         title = { Text("Atur lokasi", color = Emerald, fontWeight = FontWeight.Bold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Text("Pilih kota cepat atau masukkan koordinat yang lebih akurat supaya jadwal sholat dan kiblat sesuai lokasi.", fontSize = 12.sp, color = MutedInk, lineHeight = 18.sp)
+                Text("Gunakan lokasi perangkat dengan izin Android, pilih kota cepat, atau masukkan koordinat sendiri.", fontSize = 12.sp, color = MutedInk, lineHeight = 18.sp)
+                Button(
+                    onClick = onUseCurrentLocation,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(13.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Emerald)
+                ) {
+                    Icon(Icons.Filled.LocationOn, contentDescription = null)
+                    Spacer(Modifier.width(7.dp))
+                    Text("Gunakan lokasi perangkat")
+                }
                 val presets = listOf(
                     AppLocation("Jakarta", -6.2088, 106.8456),
                     AppLocation("Bandar Lampung", -5.3971, 105.2668),
