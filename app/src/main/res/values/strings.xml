@@ -1,4 +1,10 @@
 <resources>
     <string name="app_name">Nur Qur’an</string>
-    <string name="app_tagline">Teman ibadah setiap hari</string>
+    <string name="tagline">Teman Ibadah Setiap Hari</string>
+    <string name="nav_home">Beranda</string>
+    <string name="nav_quran">Al-Qur’an</string>
+    <string name="nav_hadith">Hadis</string>
+    <string name="nav_prayer">Sholat</string>
+    <string name="nav_more">Lainnya</string>
+    <string name="offline_message">Data belum tersedia. Periksa koneksi lalu coba lagi.</string>
 </resources>

@@ -1,97 +1,158 @@
-name: Build Nur Qur'an APK
+name: Android CI
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: [main, master]
   pull_request:
-    branches: ["main", "master"]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  verify:
+    name: Test, lint, debug APK
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
+      - name: Install pinned Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.13'
+          cache-provider: basic
+
+      # The source archive carries a bootstrap shim because the authoring sandbox
+      # could not fetch the official Wrapper JAR. CI replaces it with a real wrapper.
+      - name: Generate standard Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.13 --gradle-distribution-sha256-sum 20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78 --distribution-type bin
+          chmod +x gradlew
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools'
+        uses: android-actions/setup-android@v4
 
-      - name: Install Android 35 platform
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Install Android API 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      - name: Run unit tests, lint, and assemble debug APK
+        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest lintDebug assembleDebug
+
+      - name: Upload debug APK and test reports
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
+          name: NurQuran-debug-and-reports
           path: |
-            ~/.gradle/caches
-            ~/.gradle/nurquran-distribution
-          key: ${{ runner.os }}-gradle-8.11.1-${{ hashFiles('**/*.gradle.kts', 'gradle.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-8.11.1-
-
-      - name: Build debug APK
-        run: ./gradlew --no-daemon --stacktrace assembleDebug
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: NurQuran-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/reports/lint-results-debug.html
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
           retention-days: 14
 
-- name: Build signed release APK
-        id: signed_release
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+  signed-release:
+    name: Signed release APK (optional secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: verify
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install pinned Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.13'
+          cache-provider: basic
+
+      - name: Generate standard Gradle Wrapper
         run: |
-          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            echo "built=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Signing key belum diatur; APK release dilewati."
+          gradle wrapper --gradle-version 8.13 --gradle-distribution-sha256-sum 20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78 --distribution-type bin
+          chmod +x gradlew
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android API 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Decode signing key and verify all secrets are present
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${KEYSTORE_BASE64}" || -z "${KEY_ALIAS}" || -z "${KEYSTORE_PASSWORD}" || -z "${KEY_PASSWORD}" ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "## Signed APK: skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "Signing secrets are not all configured. No release APK was built." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          KEYSTORE_PATH="$RUNNER_TEMP/nurquran-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "key_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
 
-          test -n "$ANDROID_KEYSTORE_PASSWORD"
-          test -n "$ANDROID_KEY_ALIAS"
-          test -n "$ANDROID_KEY_PASSWORD"
+      - name: Build signed release APK
+        if: steps.signing.outputs.available == 'true'
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ steps.signing.outputs.key_path }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --stacktrace assembleRelease
 
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          test -n "$SDK_ROOT"
-
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" |
-            base64 --decode > "$RUNNER_TEMP/nurquran-release.jks"
-
-          chmod 600 "$RUNNER_TEMP/nurquran-release.jks"
-          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/nurquran-release.jks"
-
-          ./gradlew --no-daemon --stacktrace assembleRelease
-
-          "$SDK_ROOT/build-tools/35.0.0/apksigner" verify \
-            --verbose --print-certs \
-            app/build/outputs/apk/release/app-release.apk
-
-          echo "built=true" >> "$GITHUB_OUTPUT"
+      - name: Verify APK signature and write SHA-256
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK"
+          sha256sum "$APK" > app/build/outputs/apk/release/SHA256SUMS.txt
+          echo "## Signed APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "APK signature verification completed in CI; checksum is included in the artifact." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload signed release APK
-        if: steps.signed_release.outputs.built == 'true'
-        uses: actions/upload-artifact@v4
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v7
         with:
           name: NurQuran-release-signed-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Remove temporary signing key
+        if: always() && steps.signing.outputs.available == 'true'
+        run: rm -f "${{ steps.signing.outputs.key_path }}"
