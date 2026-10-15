@@ -46,6 +46,7 @@ data class PrayerAlarmEvent(val name: String, val atMillis: Long)
 data class PrayerPack(val today: List<PrayerTime>, val events: List<PrayerAlarmEvent>, val dateLabel: String)
 data class HadithItem(val number: Int, val arabic: String, val translation: String)
 data class DailyAyah(val reference: String, val arabic: String, val translation: String)
+data class QuranBookmark(val surahNumber: Int, val ayahNumber: Int)
 
 class IslamicRepository(context: Context) {
     private val appContext = context.applicationContext
@@ -71,10 +72,50 @@ class IslamicRepository(context: Context) {
         prefs.edit().putBoolean("adhan_enabled", enabled).apply()
     }
 
+    fun isCustomAdhanAudioSelected(): Boolean = prefs.getBoolean("adhan_custom_audio", false)
+
+    fun setCustomAdhanAudioSelected(selected: Boolean) {
+        prefs.edit().putBoolean("adhan_custom_audio", selected).apply()
+    }
+
     fun getLastReadSurah(): Int = prefs.getInt("last_read_surah", 1)
     fun getLastReadAyah(): Int = prefs.getInt("last_read_ayah", 1)
     fun saveReadingProgress(surah: Int, ayah: Int) {
         prefs.edit().putInt("last_read_surah", surah).putInt("last_read_ayah", ayah).apply()
+    }
+
+    fun getQuranBookmarks(): List<QuranBookmark> = runCatching {
+        val array = JSONArray(prefs.getString("quran_bookmarks", "[]") ?: "[]")
+        buildList {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val surah = item.optInt("surah", 0)
+                val ayah = item.optInt("ayah", 0)
+                if (surah in 1..114 && ayah > 0) add(QuranBookmark(surah, ayah))
+            }
+        }.distinctBy { "${it.surahNumber}:${it.ayahNumber}" }
+    }.getOrDefault(emptyList())
+
+    /** Returns true when a bookmark was added, false when an existing bookmark was removed. */
+    fun toggleQuranBookmark(surah: Int, ayah: Int): Boolean {
+        if (surah !in 1..114 || ayah < 1) return false
+        val key = "$surah:$ayah"
+        val current = getQuranBookmarks().toMutableList()
+        val existing = current.indexOfFirst { "${it.surahNumber}:${it.ayahNumber}" == key }
+        val added = existing < 0
+        if (added) current.add(0, QuranBookmark(surah, ayah)) else current.removeAt(existing)
+        val array = JSONArray()
+        current.distinctBy { "${it.surahNumber}:${it.ayahNumber}" }.forEach {
+            array.put(JSONObject().put("surah", it.surahNumber).put("ayah", it.ayahNumber))
+        }
+        prefs.edit().putString("quran_bookmarks", array.toString()).apply()
+        return added
+    }
+
+    fun isAutoPlayRecitationEnabled(): Boolean = prefs.getBoolean("quran_auto_play", false)
+
+    fun setAutoPlayRecitationEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("quran_auto_play", enabled).apply()
     }
 
     fun cachedSurahs(): List<Surah> = runCatching {

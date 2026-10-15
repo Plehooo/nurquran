@@ -1,93 +1,81 @@
 # Nur Qur’an — Android Native
 
-Aplikasi ibadah Android berbasis Kotlin + Jetpack Compose. Desain menggunakan hijau zamrud, krem, dan emas; bukan aplikasi web/HTML.
+Aplikasi ibadah Android native berbasis Kotlin + Jetpack Compose. Desain memakai hijau zamrud, krem, dan emas; bukan aplikasi web/HTML.
 
 ## Fitur
 
-- **Al-Qur’an:** daftar 114 surah, teks Arab Utsmani, terjemahan Indonesia, pencarian surah, posisi bacaan terakhir, cache surah yang pernah dibuka, serta audio murottal per ayat.
-- **Hadis:** beberapa koleksi populer (Bukhari, Muslim, Tirmidzi, Abu Dawud, An-Nasa’i, Ibnu Majah), teks Arab dan terjemahan Indonesia, serta pemuatan bertahap.
-- **Jadwal sholat:** Subuh, Zuhur, Asar, Maghrib, dan Isya berdasarkan koordinat dengan metode Kemenag RI (AlAdhan method 20).
-- **Adzan otomatis:** nonaktif secara default hingga diaktifkan pengguna; mendukung tombol on/off, penghentian audio saat dimatikan, izin alarm tepat, notifikasi, serta penjadwalan ulang saat perangkat menyala atau izin alarm berubah.
-- **Kiblat:** perhitungan bearing menuju Ka’bah dan kompas menggunakan sensor rotasi perangkat.
-- **Lokasi:** pilih kota/koordinat manual atau tekan **Gunakan lokasi perangkat**. Izin lokasi foreground baru diminta setelah pengguna menekan tombol; aplikasi tidak melacak lokasi di latar belakang.
-- **Brand/UI:** ikon aplikasi dan ilustrasi logo khusus, kartu konten, navigasi bawah, dan layout ramah ponsel.
+- **Al-Qur’an:** daftar 114 surah, teks Arab Utsmani, terjemahan Indonesia, pencarian surah, posisi bacaan terakhir, cache lokal, dan murottal per ayat.
+- **Ngaji lebih nyaman:** putar murottal berurutan sampai akhir surah, bookmark ayat tersimpan secara lokal, daftar ayat tersimpan, dan lanjut kembali ke ayat yang ditandai.
+- **Hadis:** koleksi populer (Bukhari, Muslim, Tirmidzi, Abu Dawud, An-Nasa’i, Ibnu Majah), teks Arab, terjemahan Indonesia, serta pemuatan bertahap.
+- **Jadwal sholat:** Subuh, Zuhur, Asar, Maghrib, dan Isya memakai koordinat serta metode Kemenag RI (AlAdhan method 20), dengan hitung mundur menuju waktu berikutnya.
+- **Adzan otomatis:** pengaktifan dengan izin Android, notifikasi kontrol audio, alarm tepat bila izin tersedia, jadwal yang diperbarui setelah adzan dan saat perangkat menyala/perubahan zona waktu, serta fallback saat layanan/jaringan gagal.
+- **Audio Jiharkah:** impor rekaman Jiharkah milikmu dari penyimpanan HP satu kali; file disimpan privat, bisa dites langsung, dan dipakai otomatis pada waktu sholat. Audio bawaan umum tidak diklaim sebagai Jiharkah.
+- **Kiblat:** perhitungan bearing menuju Ka’bah dan kompas dengan sensor perangkat.
+- **Lokasi:** gunakan lokasi perangkat setelah izin diberikan, atau isi kota/koordinat manual. Tidak ada pelacakan latar belakang lokasi.
+- **Cache:** teks dan jadwal yang berhasil dimuat disimpan agar tetap tersedia saat koneksi terbatas.
 
-## Build APK melalui Termux → GitHub Actions
+## Termux → GitHub Actions → APK
 
-Build Android SDK dilakukan di GitHub Actions, jadi Termux tidak perlu memasang Android SDK lengkap.
+> Untuk memperbarui repository `Plehooo/nurquran` yang sudah ada, gunakan metode overlay di bawah. Ini mengganti file yang memang diperbarui saja, tidak menghapus file lain, dan tidak memakai `git push --force`.
 
-1. Unduh ZIP proyek ke folder Downloads Android, lalu ekstrak dari Termux:
+### 1. Siapkan repository di Termux
 
-   ```bash
-   termux-setup-storage
-   pkg update
-   pkg install git gh curl unzip openjdk-17 -y
-   cd ~/storage/downloads
-   unzip NurQuran-Termux-GitHub.zip -d ~/
-   cd ~/NurQuran
-   chmod +x gradlew termux-push.sh
-   gh auth login
-   ```
+```bash
+pkg update
+pkg install git gh unzip curl openjdk-17 -y
+termux-setup-storage
+gh auth login
+cd ~
+git clone https://github.com/Plehooo/nurquran.git NurQuran
+cd ~/NurQuran
+```
 
-2. Buat repository kosong bernama `nurquran` di GitHub (jangan centang opsi README/license karena proyek ini sudah memilikinya). Kemudian push dengan script:
+Kalau `~/NurQuran` sudah merupakan hasil `git clone`, langsung masuk ke folder itu lalu jalankan `git pull --rebase origin main` sebelum menimpa file.
 
-   ```bash
-   ./termux-push.sh https://github.com/Plehooo/nurquran.git
-   ```
+### 2. Terapkan patch
 
-   Ganti `Plehooo` bila username GitHub-mu berbeda. Script menjalankan `git init` bila diperlukan, membuat commit, lalu push ke branch `main`.
+Salin `NurQuran-Patch.zip` ke folder Downloads HP, lalu jalankan:
 
-   Cara manual yang setara, bila dibutuhkan:
+```bash
+cd ~/NurQuran
+unzip -o ~/storage/downloads/NurQuran-Patch.zip -d .
+chmod +x gradlew termux-push.sh
+./termux-push.sh https://github.com/Plehooo/nurquran.git
+```
 
-   ```bash
-   git init
-   git branch -M main
-   git add .
-   git commit -m "Initial Nur Quran Android app"
-   git remote add origin https://github.com/Plehooo/nurquran.git
-   git push -u origin main
-   ```
+Script hanya menambahkan file yang telah diperbarui ke commit, mengambil riwayat remote terbaru, mencoba rebase, lalu push ke branch aktif. Jika terjadi konflik rebase, jangan hapus file secara massal; periksa `git status` dan selesaikan konflik sebelum melanjutkan.
 
-3. Di GitHub buka **Actions → Build Nur Qur'an APK**. Tunggu sampai workflow selesai.
-4. Buka run workflow yang hijau, lalu unduh artifact **NurQuran-debug-apk**. Di dalamnya ada `app-debug.apk`; pindahkan ke HP dan instal.
+### 3. Ambil APK
 
-`app-debug.apk` adalah build debug untuk pengujian/sideload, bukan APK release bertanda tangan untuk distribusi Play Store. Workflow otomatis berjalan ketika ada push ke `main`/`master`, dan juga dapat dijalankan melalui **Run workflow**.
+Buka GitHub `Plehooo/nurquran` → **Actions** → workflow **Build Nur Qur'an APK** → pilih run terbaru. Unduh artifact **NurQuran-debug-apk** dan instal `app-debug.apk` di HP.
 
-## Build lokal (opsional)
+Build APK debug terjadi di GitHub Actions, jadi Android SDK lengkap tidak wajib dipasang di Termux. Untuk build lokal, jalankan `./gradlew assembleDebug` setelah Android SDK Platform 35 dan Build Tools 35.0.0 tersedia.
 
-`./gradlew assembleDebug` membutuhkan Android SDK Platform 35 dan Android Build Tools 35.0.0. Di lingkungan Termux biasa, gunakan GitHub Actions di atas jika SDK belum terpasang.
+## Izin dan catatan alarm
 
-## Izin dan perilaku alarm
-
-- Lokasi: izin lokasi hanya diminta setelah menekan **Gunakan lokasi perangkat**. Jika ditolak, kota dan koordinat manual tetap bisa dipakai.
-- Pada Android 13+, izinkan **notifikasi** untuk status dan kontrol adzan.
-- Pada Android 12+, buka **pengaturan alarm tepat** melalui tombol *Atur izin adzan*. Jika izin tidak tersedia, aplikasi mencoba alarm inexact yang dapat tertunda oleh sistem.
-- Beberapa perangkat menghentikan aplikasi latar belakang melalui penghemat baterai. Izinkan aktivitas latar belakang untuk aplikasi ini jika alarm tidak berbunyi.
-- Audio adzan diunduh satu kali ketika internet tersedia. Jika gagal diunduh, pemutar memakai suara alarm bawaan perangkat sebagai fallback.
-- Jadwal API dapat berbeda beberapa menit dari jadwal masjid atau otoritas setempat. Cocokkan waktu dengan jadwal resmi di wilayahmu.
+- Android 13+: berikan izin notifikasi.
+- Android 12+: izinkan **Alarm & pengingat** agar alarm lebih presisi. Jika izin tidak tersedia, sistem mencoba alarm yang dapat tertunda.
+- Izinkan aktivitas latar belakang untuk Nur Qur’an bila ponsel membatasi aplikasi secara agresif lewat penghemat baterai.
+- Jadwal API dapat berbeda beberapa menit dari masjid atau otoritas setempat; cocokkan dengan jadwal resmi wilayahmu.
+- Jika memakai audio Jiharkah tertentu, pilih file yang benar-benar merupakan rekaman Jiharkah. Aplikasi tidak mengambil atau membundel rekaman berhak cipta dari sumber yang tidak jelas izinnya.
 
 ## API dan atribusi
 
-- Al-Qur’an, terjemahan, dan audio murottal: [Al Quran Cloud API](https://alquran.cloud/api). Data teks/terjemahan dimuat dari layanan dan cache lokal dibuat untuk surah yang pernah dibuka.
-- Waktu sholat: [AlAdhan Prayer Times API](https://aladhan.com/prayer-times-api), metode 20 (Kementerian Agama Indonesia).
-- Hadis berbahasa Indonesia: [gadingnst/hadith-api](https://github.com/gadingnst/hadith-api) dengan fallback [hadis-api-id](https://github.com/renomureza/hadis-api-id). Verifikasi edisi/rujukan saat mengutip hadis untuk keperluan resmi.
-- Audio adzan: [Beautiful adhan.ogg](https://commons.wikimedia.org/wiki/File:Beautiful_adhan.ogg), karya Adam-synagda di Wikimedia Commons, dilisensikan CC0 1.0 oleh pengunggah. File diunduh saat aplikasi berjalan dan tidak disertakan sebagai file audio di repositori.
-- Logo aplikasi dibuat khusus untuk proyek Nur Qur’an.
+- Al-Qur’an, terjemahan, dan audio murottal: [Al Quran Cloud API](https://alquran.cloud/api).
+- Waktu sholat: [AlAdhan Prayer Times API](https://aladhan.com/prayer-times-api), metode 20 (Kementerian Agama Indonesia). Dokumentasi menyatakan waktu dari API dapat berbeda dari otoritas lokal: [metode perhitungan](https://aladhan.com/calculation-methods).
+- Hadis Indonesia: [gadingnst/hadith-api](https://github.com/gadingnst/hadith-api) dengan fallback [hadis-api-id](https://github.com/renomureza/hadis-api-id).
+- Audio adzan bawaan: [Beautiful adhan.ogg](https://commons.wikimedia.org/wiki/File:Beautiful_adhan.ogg), diunggah Adam-synagda di Wikimedia Commons dengan lisensi CC0 1.0. Rekaman ini adalah audio adzan umum, bukan klaim bahwa ia khusus Jiharkah.
 
-## Struktur proyek
+## Struktur inti
 
 ```text
-NurQuran/
-├── app/src/main/java/com/ditzy/nurquran/
-│   ├── MainActivity.kt
-│   ├── data/
-│   │   ├── IslamicRepository.kt
-│   │   └── QuranAudioController.kt
-│   ├── prayer/PrayerAlarm.kt
-│   └── ui/NurQuranTheme.kt
-├── .github/workflows/android.yml
-├── app/build.gradle.kts
-├── build.gradle.kts
-├── settings.gradle.kts
-└── gradlew
+app/src/main/java/com/ditzy/nurquran/
+├── MainActivity.kt
+├── data/
+│   ├── IslamicRepository.kt
+│   └── QuranAudioController.kt
+├── prayer/PrayerAlarm.kt
+└── ui/NurQuranTheme.kt
+.github/workflows/android.yml
+termux-push.sh
 ```

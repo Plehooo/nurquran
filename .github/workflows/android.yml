@@ -44,7 +44,7 @@ jobs:
       - name: Build debug APK
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Upload APK artifact
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: NurQuran-debug-apk
@@ -52,7 +52,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-- name: Build signed release APK
+      - name: Build signed release APK
         id: signed_release
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -75,16 +75,13 @@ jobs:
 
           printf '%s' "$ANDROID_KEYSTORE_BASE64" |
             base64 --decode > "$RUNNER_TEMP/nurquran-release.jks"
-
           chmod 600 "$RUNNER_TEMP/nurquran-release.jks"
           export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/nurquran-release.jks"
 
           ./gradlew --no-daemon --stacktrace assembleRelease
-
           "$SDK_ROOT/build-tools/35.0.0/apksigner" verify \
             --verbose --print-certs \
             app/build/outputs/apk/release/app-release.apk
-
           echo "built=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload signed release APK

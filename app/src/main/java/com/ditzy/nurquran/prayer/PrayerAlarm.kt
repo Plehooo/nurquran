@@ -20,6 +20,10 @@ import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.ditzy.nurquran.MainActivity
 import com.ditzy.nurquran.data.PrayerAlarmEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -145,6 +149,9 @@ class AdhanReceiver : BroadcastReceiver() {
         } catch (_: Exception) {
             showFallbackNotification(context, name)
         }
+
+        // Keep tomorrow's and the following day's alarms armed, even when the app UI stays closed.
+        refreshPrayerEventsAsync(context, goAsync())
     }
 
     private fun showFallbackNotification(context: Context, name: String) {
@@ -177,7 +184,32 @@ class BootReceiver : BroadcastReceiver() {
                 Intent.ACTION_TIMEZONE_CHANGED,
                 "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"
             )) {
-            PrayerScheduler.rescheduleSaved(context)
+            refreshPrayerEventsAsync(context, goAsync())
+        }
+    }
+}
+
+private fun refreshPrayerEventsAsync(context: Context, pendingResult: BroadcastReceiver.PendingResult) {
+    val appContext = context.applicationContext
+    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        try {
+            val repository = com.ditzy.nurquran.data.IslamicRepository(appContext)
+            if (!repository.isAdhanEnabled()) {
+                PrayerScheduler.cancelSaved(appContext)
+                return@launch
+            }
+            val location = repository.getLocation()
+            val pack = repository.getPrayerPack(location)
+            if (pack.events.isNotEmpty()) {
+                PrayerScheduler.scheduleEvents(appContext, pack.events)
+            } else {
+                // Existing alarms are still better than leaving the device completely unscheduled.
+                PrayerScheduler.rescheduleSaved(appContext)
+            }
+        } catch (_: Exception) {
+            PrayerScheduler.rescheduleSaved(appContext)
+        } finally {
+            pendingResult.finish()
         }
     }
 }

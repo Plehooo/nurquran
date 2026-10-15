@@ -47,6 +47,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
@@ -71,6 +72,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -109,6 +111,7 @@ import com.ditzy.nurquran.data.DailyAyah
 import com.ditzy.nurquran.data.HadithItem
 import com.ditzy.nurquran.data.IslamicRepository
 import com.ditzy.nurquran.data.PrayerPack
+import com.ditzy.nurquran.data.QuranBookmark
 import com.ditzy.nurquran.data.QuranAudioController
 import com.ditzy.nurquran.data.Surah
 import com.ditzy.nurquran.prayer.PrayerScheduler
@@ -125,6 +128,7 @@ import com.ditzy.nurquran.ui.PaleGreen
 import com.ditzy.nurquran.ui.SoftCream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -165,14 +169,18 @@ private fun NurQuranApp(repository: IslamicRepository) {
     var location by remember { mutableStateOf(repository.getLocation()) }
     var prayerPack by remember { mutableStateOf(PrayerPack(repository.cachedTodayPrayerTimes(location), repository.cachedPrayerEvents(), "")) }
     var isPrayerLoading by remember { mutableStateOf(false) }
+    var currentTimeMillis by remember { mutableStateOf(System.currentTimeMillis()) }
     var showLocationDialog by remember { mutableStateOf(false) }
     var selectedBook by remember { mutableStateOf("bukhari") }
     var hadiths by remember { mutableStateOf<List<HadithItem>>(emptyList()) }
     var hadithStart by remember { mutableIntStateOf(21) }
     var isHadithLoading by remember { mutableStateOf(false) }
     var adhanEnabled by remember { mutableStateOf(false) }
+    var customAdhanAudio by remember { mutableStateOf(repository.isCustomAdhanAudioSelected()) }
     var permissionHint by remember { mutableStateOf("") }
     var playingGlobalAyah by remember { mutableIntStateOf(-1) }
+    var quranBookmarks by remember { mutableStateOf(repository.getQuranBookmarks()) }
+    var autoPlayRecitation by remember { mutableStateOf(repository.isAutoPlayRecitationEnabled()) }
     val quranAudio = remember { QuranAudioController() }
 
 
@@ -216,8 +224,12 @@ private fun NurQuranApp(repository: IslamicRepository) {
                     }
                 }
 
+                if (result.isSuccess) {
+                    repository.setCustomAdhanAudioSelected(true)
+                    customAdhanAudio = true
+                }
                 permissionHint = if (result.isSuccess) {
-                    "Audio adzan berhasil disimpan dan akan dipakai pada jadwal berikutnya."
+                    "Audio pilihan tersimpan. Audio ini akan dipakai otomatis saat waktu sholat."
                 } else {
                     "Gagal menyimpan audio: ${
                         result.exceptionOrNull()?.message ?: "format tidak didukung"
@@ -351,6 +363,13 @@ private fun NurQuranApp(repository: IslamicRepository) {
     }
 
     LaunchedEffect(Unit) {
+        while (true) {
+            currentTimeMillis = System.currentTimeMillis()
+            delay(30_000L)
+        }
+    }
+
+    LaunchedEffect(Unit) {
         surahs = repository.getSurahs()
         dailyAyah = repository.getDailyAyah()
         adhanEnabled = repository.isAdhanEnabled()
@@ -388,6 +407,8 @@ private fun NurQuranApp(repository: IslamicRepository) {
     }
 
     fun openSurah(surah: Surah) {
+        quranAudio.stop()
+        playingGlobalAyah = -1
         selectedSurah = surah
         verses = repository.cachedAyahs(surah.number)
         isVersesLoading = verses.isEmpty()
@@ -397,6 +418,35 @@ private fun NurQuranApp(repository: IslamicRepository) {
             verses = loaded
             isVersesLoading = false
             repository.saveReadingProgress(surah.number, if (surah.number == repository.getLastReadSurah()) repository.getLastReadAyah() else 1)
+        }
+    }
+
+    fun testAdhanAudio() {
+        val intent = android.content.Intent(context, com.ditzy.nurquran.prayer.AdhanService::class.java).apply {
+            putExtra(PrayerScheduler.EXTRA_NAME, "Tes audio")
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+            else context.startService(intent)
+        }.onSuccess {
+            permissionHint = "Tes audio dimulai. Hentikan dari notifikasi jika ingin menghentikannya lebih awal."
+        }.onFailure {
+            permissionHint = "Tes audio gagal dimulai: ${it.message ?: "periksa izin Android"}"
+        }
+    }
+
+    fun restoreDefaultAdhanAudio() {
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { File(context.filesDir, "adhan.ogg").delete() }
+                repository.setCustomAdhanAudioSelected(false)
+                customAdhanAudio = false
+                repository.downloadAdhanIfNeeded()
+            }.onSuccess {
+                permissionHint = "Audio bawaan dipulihkan jika internet tersedia."
+            }.onFailure {
+                permissionHint = "Audio bawaan belum dapat dipulihkan: ${it.message ?: "coba lagi"}"
+            }
         }
     }
 
@@ -443,7 +493,7 @@ private fun NurQuranApp(repository: IslamicRepository) {
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
                 AppTab.HOME -> HomeScreen(
-                    location, prayerPack, dailyAyah, isPrayerLoading,
+                    location, prayerPack, dailyAyah, isPrayerLoading, currentTimeMillis,
                     onOpenQuran = { tab = AppTab.QURAN },
                     onOpenHadith = { tab = AppTab.HADITH },
                     onOpenPrayer = { tab = AppTab.PRAYER },
@@ -459,8 +509,17 @@ private fun NurQuranApp(repository: IslamicRepository) {
                 AppTab.QURAN -> QuranScreen(
                     surahs = surahs,
                     lastReadSurah = repository.getLastReadSurah(),
+                    bookmarks = quranBookmarks,
                     onRefresh = { scope.launch { surahs = repository.getSurahs() } },
                     onOpen = { openSurah(it) },
+                    onOpenBookmark = { bookmark ->
+                        repository.saveReadingProgress(bookmark.surahNumber, bookmark.ayahNumber)
+                        surahs.firstOrNull { it.number == bookmark.surahNumber }?.let { openSurah(it) }
+                    },
+                    onRemoveBookmark = { bookmark ->
+                        repository.toggleQuranBookmark(bookmark.surahNumber, bookmark.ayahNumber)
+                        quranBookmarks = repository.getQuranBookmarks()
+                    },
                     onBack = { tab = AppTab.HOME },
                     onSettings = { tab = AppTab.SETTINGS }
                 )
@@ -472,15 +531,36 @@ private fun NurQuranApp(repository: IslamicRepository) {
                     lastReadAyah = repository.getLastReadAyah(),
                     surahOffset = selectedSurah?.let { chosen -> surahs.filter { it.number < chosen.number }.sumOf { it.ayahCount } } ?: 0,
                     playingGlobalAyah = playingGlobalAyah,
+                    bookmarkedAyahs = quranBookmarks.filter { it.surahNumber == selectedSurah?.number }.map { it.ayahNumber }.toSet(),
+                    autoPlayRecitation = autoPlayRecitation,
+                    onAutoPlayChange = { enabled ->
+                        autoPlayRecitation = enabled
+                        repository.setAutoPlayRecitationEnabled(enabled)
+                    },
                     onBack = { quranAudio.stop(); playingGlobalAyah = -1; tab = AppTab.QURAN },
                     onSaveAyah = { ayah -> selectedSurah?.let { repository.saveReadingProgress(it.number, ayah) }; permissionHint = "Posisi bacaan disimpan." },
+                    onToggleBookmark = { ayah ->
+                        val current = selectedSurah
+                        if (current != null) {
+                            repository.toggleQuranBookmark(current.number, ayah)
+                            repository.saveReadingProgress(current.number, ayah)
+                            quranBookmarks = repository.getQuranBookmarks()
+                        }
+                    },
                     onPlayAyah = { global ->
                         if (playingGlobalAyah == global) {
                             quranAudio.stop()
                             playingGlobalAyah = -1
                         } else {
                             playingGlobalAyah = -1
-                            quranAudio.play(global, { started -> playingGlobalAyah = started }, { playingGlobalAyah = -1 })
+                            val activeSurah = selectedSurah
+                            if (autoPlayRecitation && activeSurah != null && verses.isNotEmpty()) {
+                                val offset = surahs.filter { it.number < activeSurah.number }.sumOf { it.ayahCount }
+                                val sequence = verses.map { ayah -> ayah.globalNumber.takeIf { it > 0 } ?: (offset + ayah.numberInSurah) }
+                                quranAudio.playSequence(sequence, global, { started -> playingGlobalAyah = started }, { playingGlobalAyah = -1 })
+                            } else {
+                                quranAudio.play(global, { started -> playingGlobalAyah = started }, { playingGlobalAyah = -1 })
+                            }
                         }
                     }
                 )
@@ -519,6 +599,7 @@ private fun NurQuranApp(repository: IslamicRepository) {
                     location = location,
                     prayerPack = prayerPack,
                     loading = isPrayerLoading,
+                    nowMillis = currentTimeMillis,
                     adhanEnabled = adhanEnabled,
                     hint = permissionHint,
                     onSetLocation = { showLocationDialog = true },
@@ -536,6 +617,7 @@ private fun NurQuranApp(repository: IslamicRepository) {
                 AppTab.SETTINGS -> SettingsScreen(
                     location = location,
                     adhanEnabled = adhanEnabled,
+                    customAdhanAudio = customAdhanAudio,
                     hint = permissionHint,
                     onBack = { tab = AppTab.HOME },
                     onSetLocation = { showLocationDialog = true },
@@ -552,6 +634,8 @@ private fun NurQuranApp(repository: IslamicRepository) {
                     onChooseAdhanAudio = {
                         adhanAudioPicker.launch(arrayOf("audio/*"))
                     },
+                    onTestAdhanAudio = { testAdhanAudio() },
+                    onRestoreDefaultAdhanAudio = { restoreDefaultAdhanAudio() },
                     onOpenExactAlarm = { enableAdhan() }
                 )
             }
@@ -573,12 +657,20 @@ private fun NurQuranApp(repository: IslamicRepository) {
     }
 }
 
+private fun formatPrayerCountdown(targetMillis: Long, nowMillis: Long): String {
+    val remainingMinutes = ((targetMillis - nowMillis).coerceAtLeast(0L) / 60_000L)
+    val hours = remainingMinutes / 60L
+    val minutes = remainingMinutes % 60L
+    return if (hours > 0L) "$hours jam $minutes menit" else "$minutes menit"
+}
+
 @Composable
 private fun HomeScreen(
     location: AppLocation,
     prayerPack: PrayerPack,
     dailyAyah: DailyAyah?,
     loading: Boolean,
+    nowMillis: Long,
     onOpenQuran: () -> Unit,
     onOpenHadith: () -> Unit,
     onOpenPrayer: () -> Unit,
@@ -648,6 +740,9 @@ private fun HomeScreen(
                     Column(Modifier.weight(1f)) {
                         Text(if (next != null) "Sholat berikutnya · ${next.name}" else "Jadwal sholat hari ini", color = MutedInk, fontSize = 12.sp)
                         Text(if (next != null) SimpleDateFormat("HH:mm", Locale.US).format(Date(next.atMillis)) else "${location.name}", color = Emerald, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                        if (next != null) {
+                            Text("Dalam ${formatPrayerCountdown(next.atMillis, nowMillis)}", color = Jade, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     if (loading) androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = Jade)
                     else Icon(Icons.Filled.AccessTime, contentDescription = null, tint = Gold, modifier = Modifier.size(28.dp))
@@ -725,8 +820,11 @@ private fun TextButtonWithIcon(text: String, onClick: () -> Unit) {
 private fun QuranScreen(
     surahs: List<Surah>,
     lastReadSurah: Int,
+    bookmarks: List<QuranBookmark>,
     onRefresh: () -> Unit,
     onOpen: (Surah) -> Unit,
+    onOpenBookmark: (QuranBookmark) -> Unit,
+    onRemoveBookmark: (QuranBookmark) -> Unit,
     onBack: () -> Unit,
     onSettings: () -> Unit
 ) {
@@ -765,6 +863,34 @@ private fun QuranScreen(
                                 Text("Surah ${surahs.firstOrNull { it.number == lastReadSurah }?.nameLatin ?: "Al-Fatihah"}", color = Color(0xFFDEEBE1), fontSize = 12.sp)
                             }
                             Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = Gold)
+                        }
+                    }
+                }
+                if (bookmarks.isNotEmpty()) {
+                    item {
+                        Text("Ayat tersimpan · ${bookmarks.size}", color = Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.padding(top = 4.dp))
+                    }
+                    items(bookmarks, key = { "bookmark-${it.surahNumber}-${it.ayahNumber}" }) { bookmark ->
+                        val savedSurah = surahs.firstOrNull { it.number == bookmark.surahNumber }
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = PaleGreen)
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().clickable { onOpenBookmark(bookmark) }.padding(start = 14.dp, end = 6.dp, top = 11.dp, bottom = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Bookmark, contentDescription = null, tint = Jade, modifier = Modifier.size(21.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(savedSurah?.nameLatin ?: "Surah ${bookmark.surahNumber}", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    Text("Ayat ${bookmark.ayahNumber} · ketuk untuk melanjutkan", color = MutedInk, fontSize = 11.sp)
+                                }
+                                IconButton(onClick = { onRemoveBookmark(bookmark) }) {
+                                    Icon(Icons.Filled.BookmarkBorder, contentDescription = "Hapus bookmark", tint = MutedInk)
+                                }
+                            }
                         }
                     }
                 }
@@ -809,8 +935,12 @@ private fun ReaderScreen(
     lastReadAyah: Int,
     surahOffset: Int,
     playingGlobalAyah: Int,
+    bookmarkedAyahs: Set<Int>,
+    autoPlayRecitation: Boolean,
+    onAutoPlayChange: (Boolean) -> Unit,
     onBack: () -> Unit,
     onSaveAyah: (Int) -> Unit,
+    onToggleBookmark: (Int) -> Unit,
     onPlayAyah: (Int) -> Unit
 ) {
     val listState = rememberLazyListState()
@@ -821,6 +951,24 @@ private fun ReaderScreen(
     }
     Column(Modifier.fillMaxSize()) {
         ScreenHeader(surah?.nameLatin ?: "Baca Al-Qur’an", "Teks Arab · Terjemahan Indonesia", onBack = onBack)
+        if (surah != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 17.dp, vertical = 5.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = PaleGreen)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Murottal berurutan", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("Putar ayat berikutnya otomatis sampai akhir surah", color = MutedInk, fontSize = 10.sp)
+                    }
+                    Switch(checked = autoPlayRecitation, onCheckedChange = onAutoPlayChange)
+                }
+            }
+        }
         if (surah == null) {
             EmptyPanel("Pilih surah terlebih dahulu", "Buka daftar Al-Qur’an untuk memilih surah.", onBack)
         } else if (verses.isEmpty() && loading) {
@@ -867,8 +1015,17 @@ private fun ReaderScreen(
                                 IconButton(onClick = { onPlayAyah(globalAyahNumber) }, modifier = Modifier.size(36.dp)) {
                                     Icon(Icons.Filled.VolumeUp, contentDescription = "Putar murottal ayat", tint = if (playingGlobalAyah == globalAyahNumber) Gold else Jade, modifier = Modifier.size(21.dp))
                                 }
+                                IconButton(onClick = { onToggleBookmark(ayah.numberInSurah) }, modifier = Modifier.size(36.dp)) {
+                                    val saved = ayah.numberInSurah in bookmarkedAyahs
+                                    Icon(
+                                        if (saved) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                                        contentDescription = if (saved) "Hapus bookmark ayat" else "Simpan bookmark ayat",
+                                        tint = if (saved) Gold else Jade,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                                 IconButton(onClick = { onSaveAyah(ayah.numberInSurah) }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Filled.BookmarkBorder, contentDescription = "Simpan posisi bacaan", tint = Jade, modifier = Modifier.size(20.dp))
+                                    Icon(Icons.Filled.CheckCircle, contentDescription = "Tandai sebagai posisi terakhir dibaca", tint = Jade, modifier = Modifier.size(20.dp))
                                 }
                             }
                             Text(
@@ -962,6 +1119,7 @@ private fun PrayerScreen(
     location: AppLocation,
     prayerPack: PrayerPack,
     loading: Boolean,
+    nowMillis: Long,
     adhanEnabled: Boolean,
     hint: String,
     onSetLocation: () -> Unit,
@@ -982,6 +1140,18 @@ private fun PrayerScreen(
                         Text(String.format(Locale.US, "%.4f, %.4f", location.latitude, location.longitude), color = Color(0xFFD8E6DC), fontSize = 11.sp)
                     }
                     Icon(Icons.Filled.ChevronRight, contentDescription = "Atur lokasi", tint = Gold)
+                }
+            }
+            prayerPack.events.firstOrNull()?.let { nextEvent ->
+                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = PaleGreen)) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.AccessTime, contentDescription = null, tint = Emerald, modifier = Modifier.size(25.dp))
+                        Spacer(Modifier.width(11.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Menuju ${nextEvent.name}", color = Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text("${SimpleDateFormat("HH:mm", Locale.US).format(Date(nextEvent.atMillis))} · ${formatPrayerCountdown(nextEvent.atMillis, nowMillis)} lagi", color = Jade, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1124,11 +1294,14 @@ private fun qiblaBearing(latitude: Double, longitude: Double): Float {
 private fun SettingsScreen(
     location: AppLocation,
     adhanEnabled: Boolean,
+    customAdhanAudio: Boolean,
     hint: String,
     onBack: () -> Unit,
     onSetLocation: () -> Unit,
     onToggleAdhan: (Boolean) -> Unit,
     onChooseAdhanAudio: () -> Unit,
+    onTestAdhanAudio: () -> Unit,
+    onRestoreDefaultAdhanAudio: () -> Unit,
     onOpenExactAlarm: () -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
@@ -1158,7 +1331,11 @@ private fun SettingsScreen(
                     Divider(color = Color(0xFFE5E5DA))
                     Text("Audio adzan pilihan", color = Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Text(
-                        "Pilih rekaman adzan Jiharkah yang tersimpan di HP. Audio disimpan secara privat di aplikasi.",
+                        if (customAdhanAudio) {
+                            "Audio pilihan tersimpan di aplikasi dan akan diputar otomatis saat waktu sholat. Pastikan file yang dipilih memang rekaman Jiharkah."
+                        } else {
+                            "Audio bawaan adalah rekaman adzan umum, bukan rekaman yang diverifikasi sebagai Jiharkah. Impor rekaman Jiharkah dari HP agar dipakai otomatis."
+                        },
                         color = MutedInk, fontSize = 12.sp, lineHeight = 18.sp
                     )
                     Button(
@@ -1171,6 +1348,20 @@ private fun SettingsScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("Pilih audio Jiharkah dari HP")
                     }
+                    OutlinedButton(
+                        onClick = onTestAdhanAudio,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Filled.VolumeUp, contentDescription = null, tint = Emerald)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Tes audio adzan", color = Emerald)
+                    }
+                    if (customAdhanAudio) {
+                        TextButton(onClick = onRestoreDefaultAdhanAudio, modifier = Modifier.fillMaxWidth()) {
+                            Text("Kembalikan audio bawaan", color = Jade)
+                        }
+                    }
                     Text("Untuk adzan yang lebih presisi, izinkan notifikasi dan 'Alarm & pengingat' di Android. Kamu bisa mematikan fitur ini kapan saja.", color = MutedInk, fontSize = 12.sp, lineHeight = 18.sp)
                     if (hint.isNotBlank()) Text(hint, color = Jade, fontSize = 12.sp, lineHeight = 18.sp)
                     TextButton(onClick = onOpenExactAlarm) { Text("Buka pengaturan izin adzan", color = Jade) }
@@ -1179,7 +1370,7 @@ private fun SettingsScreen(
             Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = PaleGreen)) {
                 Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Text("Tentang Nur Qur’an", color = Emerald, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text("Versi 1.2.0 · Android Kotlin + Jetpack Compose", color = Ink, fontSize = 12.sp)
+                    Text("Versi 1.3.0 · Android Kotlin + Jetpack Compose", color = Ink, fontSize = 12.sp)
                     Text("Teks Qur’an dan terjemahan: Al Quran Cloud API. Waktu sholat: AlAdhan API. Hadis: Hadith API gading.dev. Data online disimpan sebagai cache setelah berhasil dimuat.", color = MutedInk, fontSize = 11.sp, lineHeight = 17.sp)
                 }
             }
